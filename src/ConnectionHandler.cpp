@@ -3087,6 +3087,8 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
 
         DEBUG_thttps(" -got peer connection - clientip is ", clientip);
 
+#define CLIENT_HELLO_MAX_SIZE 16384
+
         try {
             int rc;
 
@@ -3104,51 +3106,55 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
             bool persistProxy = false;
             //bool direct = false;
 
-            char buff[2048];
-            rc = peerconn.readFromSocket(buff, 5, (MSG_PEEK ), 20000, true);
+            char buff[7];
+            rc = peerconn.readFromSocket(buff, 6, (MSG_PEEK ), 20000, true);
             DEBUG_thttps( "bytes peeked ", rc );
             unsigned short toread = 0;
-            if (rc == 5) {
-            if (buff[0] == 22 && buff[1] == 3 && buff[2] > 0 && buff[2] < 4 )   // has TLS hello signiture
+            if (rc == 6) {
+            if (buff[0] == 22 && buff[1] == 3 && buff[2] > 0 && buff[2] < 4 && buff[5] == 1 )   // has TLS client hello signature
             checkme.isTLS = true;
 
-        toread = ( buff[3] << (8*1) | buff[4]);
-        if (toread > 2048) toread = 2048;
+        toread = ( buff[3] << (8*1) | buff[4]) + 5;
+        if (toread > CLIENT_HELLO_MAX_SIZE) {
+            toread = CLIENT_HELLO_MAX_SIZE;
+            E2LOGGER_warning("Client Hello size is ( ", toread, ") is larger than buffer");
+            DEBUG_thttps("Client Hello size is ( ", toread, ") is larger than buffer");
+        }
         }
 
         DEBUG_thttps("hello length is ", toread, " magic is ", buff[0], buff[1], buff[2], " isTLS is ", checkme.isTLS);
 
-       if(checkme.isTLS) {
-            rc = peerconn.readFromSocket(buff, toread, (MSG_PEEK ), 10000);
-            if (rc < 1 ) {     // get header from client, allowing persistency
-                if (o.conn.logconerror) {
-                    if (peerconn.getFD() > -1) {
+            if (checkme.isTLS) {
+                char buff2[CLIENT_HELLO_MAX_SIZE];
+                rc = peerconn.readFromSocket(buff2, toread, (MSG_PEEK), 10000);
+                if (rc < 1) {     // get header from client, allowing persistency
+                    if (o.conn.logconerror) {
+                        if (peerconn.getFD() > -1) {
 
-                        int err = peerconn.getErrno();
-                        //int pport = peerconn.getPeerSourcePort();
-                        std::string peerIP = peerconn.getPeerIP();
-                        if(peerconn.isTimedout())
-                        {
-                            DEBUG_thttps("Connection timed out");
+                            int err = peerconn.getErrno();
+                            //int pport = peerconn.getPeerSourcePort();
+                            std::string peerIP = peerconn.getPeerIP();
+                            if (peerconn.isTimedout()) {
+                                DEBUG_thttps("Connection timed out");
+                            }
+                            E2LOGGER_error("No header recd from client - errno: ", err);
+                        } else {
+                            E2LOGGER_info("Client connection closed early - no TLS header received");
                         }
-                        E2LOGGER_error("No header recd from client - errno: ", err);
-                    } else {
-                        E2LOGGER_info("Client connection closed early - no TLS header received");
                     }
-                }
-            firsttime = false;
-            //persistPeer = false;
-        } else {
-            DEBUG_thttps("bytes peeked ", rc );
-             char *ret = get_TLS_SNI(buff, &rc);
-             if (ret != NULL) {
-             checkme.url = ret;
-             checkme.hasSNI = true;
-             }
+                    firsttime = false;
+                    //persistPeer = false;
+                } else {
+                    DEBUG_thttps("bytes peeked ", rc);
+                    char *ret = get_TLS_SNI(buff2, &rc);
+                    if (ret != nullptr) {
+                        checkme.url = ret;
+                        checkme.hasSNI = true;
+                    }
 
-            ++dystat->reqs;
-        }
-        }
+                    ++dystat->reqs;
+                }
+            }
 
         get_original_ip_port(peerconn,checkme);
 
@@ -3370,43 +3376,42 @@ char *get_TLS_SNI(char *inbytes, int* len)
     unsigned char *curr;
     unsigned char *ebytes;
      ebytes = bytes + *len;
-    if (*len < 44) return NULL;
+    if (*len < 44) return nullptr;
     unsigned char sidlen = bytes[43];
     curr = bytes + 1 + 43 + sidlen;
-    if (curr > ebytes) return NULL;
+    if (curr > ebytes) return nullptr;
     unsigned short cslen = ntohs(*(unsigned short*)curr);
     curr += 2 + cslen;
-    if (curr > ebytes) return NULL;
+    if (curr > ebytes) return nullptr;
     unsigned char cmplen = *curr;
     curr += 1 + cmplen;
-    if (curr > ebytes) return NULL;
+    if (curr > ebytes) return nullptr;
     unsigned char *maxchar = curr + 2 + ntohs(*(unsigned short*)curr);
     curr += 2;
     unsigned short ext_type = 1;
     unsigned short ext_len;
     while(curr < maxchar && ext_type != 0)
     {
-        if (curr > ebytes) return NULL;
+        if (curr > ebytes) return nullptr;
         ext_type = ntohs(*(unsigned short*)curr);
         curr += 2;
-        if (curr > ebytes) return NULL;
+        if (curr > ebytes) return nullptr;
         ext_len = ntohs(*(unsigned short*)curr);
         curr += 2;
         if(ext_type == 0)
         {
             curr += 3;
-            if (curr > ebytes) return NULL;
+            if (curr > ebytes) return nullptr;
             unsigned short namelen = ntohs(*(unsigned short*)curr);
             curr += 2;
-            if ((curr + namelen) > ebytes) return NULL;
-            //*len = namelen;
+            if ((curr + namelen) > ebytes) return nullptr;
             *(curr +namelen) = (char)0;
             return (char*)curr;
         }
         else curr += ext_len;
     }
     //if (curr != maxchar) throw std::exception("incomplete SSL Client Hello");
-    return NULL; //SNI was not present
+    return nullptr; //SNI was not present
 }
 
 

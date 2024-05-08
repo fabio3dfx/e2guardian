@@ -3087,8 +3087,6 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
 
         DEBUG_thttps(" -got peer connection - clientip is ", clientip);
 
-#define CLIENT_HELLO_MAX_SIZE 16384
-
         try {
             int rc;
 
@@ -3107,25 +3105,22 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
             //bool direct = false;
 
             char buff[7];
-            rc = peerconn.readFromSocket(buff, 6, (MSG_PEEK ), 20000, true);
-            DEBUG_thttps( "bytes peeked ", rc );
-            unsigned short toread = 0;
+            rc = peerconn.readFromSocket(buff, 6, (MSG_PEEK), 20000, true);
+            DEBUG_thttps("bytes peeked ", rc);
+            unsigned int toread = 0;
             if (rc == 6) {
-            if (buff[0] == 22 && buff[1] == 3 && buff[2] > 0 && buff[2] < 4 && buff[5] == 1 )   // has TLS client hello signature
-            checkme.isTLS = true;
+                if (buff[0] == 22 && buff[1] == 3 && buff[2] > 0 && buff[2] < 4 &&
+                    buff[5] == 1)   // has TLS client hello signature
+                    checkme.isTLS = true;
 
-        toread = ( buff[3] << (8*1) | buff[4]) + 5;
-        if (toread > CLIENT_HELLO_MAX_SIZE) {
-            toread = CLIENT_HELLO_MAX_SIZE;
-            E2LOGGER_warning("Client Hello size is ( ", toread, ") is larger than buffer");
-            DEBUG_thttps("Client Hello size is ( ", toread, ") is larger than buffer");
-        }
-        }
+                toread = (buff[3] << (8 * 1) | buff[4]) + 5;
+            }
 
         DEBUG_thttps("hello length is ", toread, " magic is ", buff[0], buff[1], buff[2], " isTLS is ", checkme.isTLS);
 
             if (checkme.isTLS) {
-                char buff2[CLIENT_HELLO_MAX_SIZE];
+             //   char buff2[CLIENT_HELLO_MAX_SIZE];
+                char *buff2 = new char[(toread + 1)];
                 rc = peerconn.readFromSocket(buff2, toread, (MSG_PEEK), 10000);
                 if (rc < 1) {     // get header from client, allowing persistency
                     if (o.conn.logconerror) {
@@ -3151,9 +3146,9 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
                         checkme.url = ret;
                         checkme.hasSNI = true;
                     }
-
                     ++dystat->reqs;
                 }
+                delete [] buff2;
             }
 
         get_original_ip_port(peerconn,checkme);

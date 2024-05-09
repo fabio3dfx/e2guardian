@@ -3084,6 +3084,7 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
         clienthost = NULL; // and the hostname, if available
         matchedip = false;
 
+#define CLIENT_HELLO_MAX_SIZE 65536
 
         DEBUG_thttps(" -got peer connection - clientip is ", clientip);
 
@@ -3116,11 +3117,12 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
                 toread = (buff[3] << (8 * 1) | buff[4]) + 5;
             }
 
-        DEBUG_thttps("hello length is ", toread, " magic is ", buff[0], buff[1], buff[2], " isTLS is ", checkme.isTLS);
+            DEBUG_thttps("hello length is ", toread, " magic is ", buff[0], buff[1], buff[2], " isTLS is ",
+                         checkme.isTLS);
 
             if (checkme.isTLS) {
-             //   char buff2[CLIENT_HELLO_MAX_SIZE];
-                char *buff2 = new char[(toread + 1)];
+                char buff2[CLIENT_HELLO_MAX_SIZE + 6 ];
+                //char *buff2 = new char[(toread + 1)];
                 rc = peerconn.readFromSocket(buff2, toread, (MSG_PEEK), 10000);
                 if (rc < 1) {     // get header from client, allowing persistency
                     if (o.conn.logconerror) {
@@ -3148,229 +3150,227 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
                     }
                     ++dystat->reqs;
                 }
-                delete [] buff2;
+                //delete[] buff2;
             }
 
-        get_original_ip_port(peerconn,checkme);
+            get_original_ip_port(peerconn, checkme);
 
-        if(!checkme.hasSNI) {
-            if(checkme.got_orig_ip) checkme.url = checkme.orig_ip;
-            else // no SNI and no orig_ip - so can't do anything sensible
-            return -1;
-        }
+            if (!checkme.hasSNI) {
+                if (checkme.got_orig_ip) checkme.url = checkme.orig_ip;
+                else // no SNI and no orig_ip - so can't do anything sensible
+                    return -1;
+            }
 
-        DEBUG_thttps("hasSNI = ", checkme.hasSNI, " SNI is ", checkme.url,  " Orig IP ", checkme.orig_ip, " Orig port ", checkme.orig_port );
-        //
-        // End of set-up section
+            DEBUG_thttps("hasSNI = ", checkme.hasSNI, " SNI is ", checkme.url, " Orig IP ", checkme.orig_ip,
+                         " Orig port ", checkme.orig_port);
+            //
+            // End of set-up section
 
-        while (firsttime )    // do just the once
-        {
-            ldl = o.currentLists();
-            //DataBuffer docbody;
-            //docbody.setTimeout(o.exchange_timeout);
-            FDTunnel fdt;
+            while (firsttime)    // do just the once
+            {
+                ldl = o.currentLists();
+                //DataBuffer docbody;
+                //docbody.setTimeout(o.exchange_timeout);
+                FDTunnel fdt;
 
-            firsttime = false;
+                firsttime = false;
 
 //
-            // do all of this normalisation etc just the once at the start.
-            checkme.url = "https://" + checkme.url;
-            checkme.setURL(checkme.url);
-            checkme.nomitm = false;
-            gettimeofday(&checkme.thestart, NULL);
+                // do all of this normalisation etc just the once at the start.
+                checkme.url = "https://" + checkme.url;
+                checkme.setURL(checkme.url);
+                checkme.nomitm = false;
+                gettimeofday(&checkme.thestart, NULL);
 
 
-            // Look up reverse DNS name of client if needed
-            if (o.conn.reverse_client_ip_lookups) {
-                getClientFromIP(clientip.c_str(), checkme.clienthost);
-            }
+                // Look up reverse DNS name of client if needed
+                if (o.conn.reverse_client_ip_lookups) {
+                    getClientFromIP(clientip.c_str(), checkme.clienthost);
+                }
 
-            filtergroup = o.filter.default_trans_fg;
+                filtergroup = o.filter.default_trans_fg;
 
-            //if(o.log_requests) {
-            if (e2logger.isEnabled(LoggerSource::requestlog)) {
-                std::string fnt = "THTTPS";
-                doRQLog(clientuser, clientip, checkme, fnt);
-            }
+                //if(o.log_requests)
+                if (e2logger.isEnabled(LoggerSource::requestlog)) {
+                    std::string fnt = "THTTPS";
+                    doRQLog(clientuser, clientip, checkme, fnt);
+                }
 
-            checkme.clientip = clientip;
+                checkme.clientip = clientip;
 
-            //CALL SB pre-authcheck
-            ldl->StoryA.runFunctEntry(ENT_STORYA_PRE_AUTH_THTTPS,checkme);
-            DEBUG_thttps("After StoryA thttps-pre-authcheck", checkme.isexception, " mess_no ",  checkme.message_no );
-            checkme.isItNaughty = checkme.isBlocked;
-            bool isbannedip = checkme.isBlocked;
+                //CALL SB pre-authcheck
+                ldl->StoryA.runFunctEntry(ENT_STORYA_PRE_AUTH_THTTPS, checkme);
+                DEBUG_thttps("After StoryA thttps-pre-authcheck", checkme.isexception, " mess_no ", checkme.message_no);
+                checkme.isItNaughty = checkme.isBlocked;
+                bool isbannedip = checkme.isBlocked;
 
-            //
-            //
-            // Start of Authentication Checks
-            //
-            //
-            // don't have credentials for this connection yet? get some!
-            overide_persist = false;
-            if(!(checkme.isItNaughty || checkme.isexception)) {
-                if (!doAuth(checkme.auth_result, authed, filtergroup, auth_plugin,  peerconn, proxysock,  header, checkme, true, true))
-                {
+                //
+                //
+                // Start of Authentication Checks
+                //
+                //
+                // don't have credentials for this connection yet? get some!
+                overide_persist = false;
+                if (!(checkme.isItNaughty || checkme.isexception)) {
+                    if (!doAuth(checkme.auth_result, authed, filtergroup, auth_plugin, peerconn, proxysock, header,
+                                checkme, true, true)) {
 
-                    if((checkme.auth_result == E2AUTH_REDIRECT) && ldl->fg[filtergroup]->ssl_mitm)
-                    {
-                       if(!checkme.nomitm)checkme.gomitm = true;
-                       checkme.isdone = true;
-                    } else {
-                       break;
+                        if ((checkme.auth_result == E2AUTH_REDIRECT) && ldl->fg[filtergroup]->ssl_mitm) {
+                            if (!checkme.nomitm)checkme.gomitm = true;
+                            checkme.isdone = true;
+                        } else {
+                            break;
+                        }
                     }
-                 }
-            }
-            checkme.filtergroup = filtergroup;
-            if(!checkme.nomitm) checkme.nomitm = !ldl->fg[filtergroup]->ssl_mitm;
+                }
+                checkme.filtergroup = filtergroup;
+                if (!checkme.nomitm) checkme.nomitm = !ldl->fg[filtergroup]->ssl_mitm;
 
-            DEBUG_thttps(" -username: ", clientuser, " -filtergroup: ", filtergroup);
+                DEBUG_thttps(" -username: ", clientuser, " -filtergroup: ", filtergroup);
 //
 //
 // End of Authentication Checking
 //
 //
 
-            //
-            //
-            // Now check if user or machine is banned and room-based checking
-            //
-            //
+                //
+                //
+                // Now check if user or machine is banned and room-based checking
+                //
+                //
 
-            // is this user banned?
-            isbanneduser = false;
-
-
-            if(checkme.hasSNI & !checkme.nomitm ) checkme.ismitmcandidate = ldl->fg[filtergroup]->ssl_mitm;
-            if(checkme.ismitmcandidate) {
-                checkme.automitm = ldl->fg[filtergroup]->automitm;
-            }
+                // is this user banned?
+                isbanneduser = false;
 
 
-            // TODO restore this for THTTPS ??
-            //if (isbannedip) {
-               // matchedip = clienthost == NULL;
-            //} else {
-            // /   if (ldl->inRoom(clientip, room, clienthost, &isbannedip, &part_banned, &checkme.isexception,
-            // /                   checkme.urld)) {
-            // /       DEBUG_thttps(" isbannedip = ", isbannedip, "ispart_banned = ", part_banned, " isexception = ", checkme.isexception);
-          //.          if (isbannedip) {
-                 //       matchedip = clienthost == NULL;
-            //            checkme.isBlocked = checkme.isItNaughty = true;
-            // /       }
-            //        if (checkme.isexception) {
-                        // do reason codes etc
-                        //checkme.exceptionreason = o.language_list.getTranslation(630);
-                        //checkme.exceptionreason.append(room);
-                        //checkme.exceptionreason.append(o.language_list.getTranslation(631));
-                        //checkme.message_no = 632;
-                    //}
+                if (checkme.hasSNI & !checkme.nomitm) checkme.ismitmcandidate = ldl->fg[filtergroup]->ssl_mitm;
+                if (checkme.ismitmcandidate) {
+                    checkme.automitm = ldl->fg[filtergroup]->automitm;
+                }
+
+
+                // TODO restore this for THTTPS ??
+                //if (isbannedip) {
+                // matchedip = clienthost == NULL;
+                //} else {
+                // /   if (ldl->inRoom(clientip, room, clienthost, &isbannedip, &part_banned, &checkme.isexception,
+                // /                   checkme.urld)) {
+                // /       DEBUG_thttps(" isbannedip = ", isbannedip, "ispart_banned = ", part_banned, " isexception = ", checkme.isexception);
+                //.          if (isbannedip) {
+                //       matchedip = clienthost == NULL;
+                //            checkme.isBlocked = checkme.isItNaughty = true;
+                // /       }
+                //        if (checkme.isexception) {
+                // do reason codes etc
+                //checkme.exceptionreason = o.language_list.getTranslation(630);
+                //checkme.exceptionreason.append(room);
+                //checkme.exceptionreason.append(o.language_list.getTranslation(631));
+                //checkme.message_no = 632;
                 //}
-            //}
+                //}
+                //}
 
-            //
-            // Start of exception checking
-            //
-            // being a banned user/IP overrides the fact that a site may be in the exception lists
-            // needn't check these lists in bypass modes
-            if (!(checkme.isdone || isbanneduser || isbannedip || checkme.isexception)) {
-                DEBUG_trace("Check StoryB thttps-checkrequest");
-                ldl->fg[filtergroup]->StoryB.runFunctEntry(ENT_STORYB_THTTPS_REQUEST,checkme);
-                DEBUG_trace("After StoryB thttps-checkrequest",
-                            " isException: ", String(checkme.isexception),
-                            " mess_no ", String(checkme.message_no));
+                //
+                // Start of exception checking
+                //
+                // being a banned user/IP overrides the fact that a site may be in the exception lists
+                // needn't check these lists in bypass modes
+                if (!(checkme.isdone || isbanneduser || isbannedip || checkme.isexception)) {
+                    DEBUG_trace("Check StoryB thttps-checkrequest");
+                    ldl->fg[filtergroup]->StoryB.runFunctEntry(ENT_STORYB_THTTPS_REQUEST, checkme);
+                    DEBUG_trace("After StoryB thttps-checkrequest",
+                                " isException: ", String(checkme.isexception),
+                                " mess_no ", String(checkme.message_no));
 
-		        if (ldl->fg[filtergroup]->reporting_level != -1){
-                	checkme.isItNaughty = checkme.isBlocked;
-		        } else {
-			        checkme.isItNaughty = false;
-		            checkme.isBlocked = false;
-		        }
-            }
-
-            //now send upstream and get response
-            if (!checkme.isItNaughty && !persistProxy) {
-                int out_port;
-                if(checkme.got_orig_ip && o.conn.use_original_ip_port)
-                    out_port = checkme.orig_port;
-                else
-                    out_port = 443;
-
-                if (connectUpstream(proxysock, checkme,out_port) > -1) {
-                    if(!checkme.isdirect) {
-                        if (sendProxyConnect(checkme.connect_site,&proxysock, &checkme) != 0) {
-                       checkme.upfailure = true;
-                       proxysock.close();
-                       }
+                    if (ldl->fg[filtergroup]->reporting_level != -1) {
+                        checkme.isItNaughty = checkme.isBlocked;
+                    } else {
+                        checkme.isItNaughty = false;
+                        checkme.isBlocked = false;
                     }
-                } else {
-                       checkme.upfailure = true;
                 }
-            }
 
-            DEBUG_thttps(" after connectUpstream nf ", checkme.isItNaughty," upfail ", checkme.upfailure);
+                //now send upstream and get response
+                if (!checkme.isItNaughty && !persistProxy) {
+                    int out_port;
+                    if (checkme.got_orig_ip && o.conn.use_original_ip_port)
+                        out_port = checkme.orig_port;
+                    else
+                        out_port = 443;
 
-            if((checkme.isItNaughty ||checkme.upfailure) && checkme.automitm && checkme.hasSNI)
-                checkme.gomitm = true;  // allows us to send splash page
-
-            if (checkme.isexception && !checkme.upfailure) {
-                    checkme.tunnel_rest = true;
-             } else {
-
-            //if ismitm - GO MITM
-                if (checkme.gomitm && !checkme.nomitm)
-                {
-                DEBUG_thttps("Going MITM ....");
-                if(!ldl->fg[filtergroup]->mitm_check_cert)
-                    checkme.nocheckcert = true;
-                goMITM(checkme, proxysock, peerconn, persistProxy, authed, persistent_authed, ip, dystat, clientip, true);
-                //persistPeer = false;
-                persistProxy = false;
-                //if (!checkme.isItNaughty)
-                    break;
-                } else {
-                if (!checkme.upfailure)
-                    checkme.tunnel_rest = true;
+                    if (connectUpstream(proxysock, checkme, out_port) > -1) {
+                        if (!checkme.isdirect) {
+                            if (sendProxyConnect(checkme.connect_site, &proxysock, &checkme) != 0) {
+                                checkme.upfailure = true;
+                                proxysock.close();
+                            }
+                        }
+                    } else {
+                        checkme.upfailure = true;
+                    }
                 }
+
+                DEBUG_thttps(" after connectUpstream nf ", checkme.isItNaughty, " upfail ", checkme.upfailure);
+
+                if ((checkme.isItNaughty || checkme.upfailure) && checkme.automitm && checkme.hasSNI)
+                    checkme.gomitm = true;  // allows us to send splash page
+
+                if (checkme.isexception && !checkme.upfailure) {
+                    checkme.tunnel_rest = true;
+                } else {
+
+                    //if ismitm - GO MITM
+                    if (checkme.gomitm && !checkme.nomitm) {
+                        DEBUG_thttps("Going MITM ....");
+                        if (!ldl->fg[filtergroup]->mitm_check_cert)
+                            checkme.nocheckcert = true;
+                        goMITM(checkme, proxysock, peerconn, persistProxy, authed, persistent_authed, ip, dystat,
+                               clientip, true);
+                        //persistPeer = false;
+                        persistProxy = false;
+                        //if (!checkme.isItNaughty)
+                        break;
+                    } else {
+                        if (!checkme.upfailure)
+                            checkme.tunnel_rest = true;
+                    }
+                }
+
+                //if not grey tunnel response
+                if (!checkme.isItNaughty && checkme.tunnel_rest) {
+                    DEBUG_thttps(" -Tunnelling to client");
+                    if (!fdt.tunnel(proxysock, peerconn, true, -1, true))
+                        persistProxy = false;
+                    checkme.docsize += fdt.throughput;
+                }
+
+                // it is not possible to send splash page on Thttps without MITM so do not try!
+
+                //Log
+                doLog(clientuser, clientip, checkme);
+
+                proxysock.close(); // close connection to proxy
+
             }
+        } catch (std::exception &e) {
+            DEBUG_thttps(" - THTTPS connection handler caught an exception: ", e.what());
+            if (o.conn.logconerror)
+                E2LOGGER_error(" - THTTPS connection handler caught an exception %s", e.what());
 
-            //if not grey tunnel response
-            if (!checkme.isItNaughty && checkme.tunnel_rest) {
-                DEBUG_thttps(" -Tunnelling to client");
-                if (!fdt.tunnel(proxysock, peerconn,true, -1 , true))
-                    persistProxy = false;
-                checkme.docsize += fdt.throughput;
-            }
-
-            // it is not possible to send splash page on Thttps without MITM so do not try!
-
-            //Log
-            doLog(clientuser, clientip, checkme);
-
-            proxysock.close(); // close connection to proxy
-
-        }
-        } catch (std::exception & e)
-        {
-        DEBUG_thttps(" - THTTPS connection handler caught an exception: ", e.what() );
-        if(o.conn.logconerror)
-            E2LOGGER_error(" - THTTPS connection handler caught an exception %s" , e.what());
-
-        // close connection to proxy
-        proxysock.close();
+            // close connection to proxy
+            proxysock.close();
             return -1;
         }
 
-    return 0;
-}
+        return 0;
+    }
 
 
-char *get_TLS_SNI(char *inbytes, int* len)
-{
-    unsigned char *bytes = reinterpret_cast<unsigned char*>(inbytes);
+char *get_TLS_SNI(char *inbytes, int *len) {
+    unsigned char *bytes = reinterpret_cast<unsigned char *>(inbytes);
     unsigned char *curr;
     unsigned char *ebytes;
-     ebytes = bytes + *len;
+    ebytes = bytes + *len;
     if (*len < 44) return nullptr;
     unsigned char sidlen = bytes[43];
     curr = bytes + 1 + 43 + sidlen;

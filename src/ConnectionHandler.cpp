@@ -3084,7 +3084,7 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
         clienthost = NULL; // and the hostname, if available
         matchedip = false;
 
-#define CLIENT_HELLO_MAX_SIZE 65536
+#define CLIENT_HELLO_MAX_SIZE 16384
 
         DEBUG_thttps(" -got peer connection - clientip is ", clientip);
 
@@ -3143,7 +3143,7 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
                     //persistPeer = false;
                 } else {
                     DEBUG_thttps("bytes peeked ", rc);
-                    char *ret = get_TLS_SNI(buff2, &rc);
+                    char *ret = get_TLS_SNI(buff2, rc);
                     if (ret != nullptr) {
                         checkme.url = ret;
                         checkme.hasSNI = true;
@@ -3366,41 +3366,49 @@ int ConnectionHandler::handleProxyTLSConnection(Socket &peerconn, String &ip, So
     }
 
 
-char *get_TLS_SNI(char *inbytes, int *len) {
-    unsigned char *bytes = reinterpret_cast<unsigned char *>(inbytes);
+char *get_TLS_SNI(char *inbytes, int len) {
+    auto bytes = reinterpret_cast<unsigned char *>(inbytes);
     unsigned char *curr;
     unsigned char *ebytes;
-    ebytes = bytes + *len;
-    if (*len < 44) return nullptr;
-    unsigned char sidlen = bytes[43];
-    curr = bytes + 1 + 43 + sidlen;
+    if (len < 44) return nullptr;
+    ebytes = bytes + len;
+    unsigned short int sid_len = bytes[43];
+    curr = bytes + 1 + 43 + sid_len;        // skip past session id
     if (curr > ebytes) return nullptr;
     unsigned short cslen = ntohs(*(unsigned short*)curr);
-    curr += 2 + cslen;
+    curr += 2 + cslen;                      // skip past Cipher Suites
     if (curr > ebytes) return nullptr;
-    unsigned char cmplen = *curr;
-    curr += 1 + cmplen;
+    unsigned short cmplen = *curr;
+    curr += 1 + cmplen;                     // skip past Compression methods
     if (curr > ebytes) return nullptr;
-    unsigned char *maxchar = curr + 2 + ntohs(*(unsigned short*)curr);
+    unsigned char *maxchar = curr + 2 + ntohs(*(unsigned short*)curr);  // get pointer to end of extensions + 1
     curr += 2;
     unsigned short ext_type = 1;
     unsigned short ext_len;
     while(curr < maxchar && ext_type != 0)
     {
         if (curr > ebytes) return nullptr;
+        //if (maxchar > ebytes) return nullptr;
         ext_type = ntohs(*(unsigned short*)curr);
         curr += 2;
         if (curr > ebytes) return nullptr;
         ext_len = ntohs(*(unsigned short*)curr);
-        curr += 2;
-        if(ext_type == 0)
+        curr += 2;                      // pointing at start of extension data
+        if(ext_type == 0)               // Is Server name extension
         {
-            curr += 3;
+            unsigned short list_len = ntohs(*(unsigned short*)curr);
+            curr += 2;
+            if(list_len < 8 ) return nullptr;
+            unsigned char *list_end = curr + list_len;
+            if(*curr != 0) return nullptr;      // check list entry type is DNS hostname i.e == 0
+            curr += 1;                  // pointing at length of DNS hostname
             if (curr > ebytes) return nullptr;
             unsigned short namelen = ntohs(*(unsigned short*)curr);
-            curr += 2;
-            if ((curr + namelen) > ebytes) return nullptr;
-            *(curr +namelen) = (char)0;
+            curr += 2;                  // pointing at DNS hostname
+            unsigned char *name_end = curr + namelen;
+            if (name_end > list_end) return nullptr;
+            if (name_end > ebytes) return nullptr;
+            *(name_end) = (char)0;     // add null char to terminate string
             return (char*)curr;
         }
         else curr += ext_len;
